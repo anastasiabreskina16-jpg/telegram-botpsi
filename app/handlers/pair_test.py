@@ -2087,11 +2087,3 @@ async def cb_phase1_word_fallback(callback: CallbackQuery) -> None:
 async def cb_completed_fallback(callback: CallbackQuery) -> None:
     await callback.answer("Сессия уже завершена")
 
-
-@router.callback_query()
-async def debug_all_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
-    # Temporary debug hook for callback routing diagnostics.
-    current_state = await state.get_state()
-    log.warning("[PAIR_CALLBACK_FALLBACK] data=%s state=%s", callback.data, current_state)
-    await callback.answer()
-

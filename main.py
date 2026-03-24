@@ -15,7 +15,7 @@ from redis.asyncio import Redis
 
 from app.config import settings
 from app.db.session import init_db
-from app.handlers import menu_router, observation_router, pair_test_router, start_router
+from app.handlers import observation_router, pair_test_router, start_router
 from app.services.retention_service import process_retention_reminders, set_scheduler_bot
 from app.services.scheduler_service import init_scheduler, shutdown_scheduler
 from app.services.timeout_service import handle_timeout, send_waiting_reminder
@@ -149,7 +149,6 @@ async def main() -> None:
         dp.include_router(start_router)
         dp.include_router(observation_router)
         dp.include_router(pair_test_router)
-        dp.include_router(menu_router)
 
         from app.db.session import AsyncSessionLocal
 

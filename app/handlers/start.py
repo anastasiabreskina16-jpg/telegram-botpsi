@@ -976,31 +976,52 @@ async def auto_resume_any_message(message: Message, state: FSMContext, dispatche
     F.data.startswith(ROLE_CALLBACK_PREFIX),
 )
 async def cb_select_role(callback: CallbackQuery, state: FSMContext) -> None:
+    print(f"🔴 DEBUG: cb_select_role CALLED with data={callback.data}")
+    log.info("🔴 DEBUG: cb_select_role CALLED with data=%s", callback.data)
     if callback.from_user is None or callback.message is None:
+        log.error("🔴 DEBUG: callback.from_user or callback.message is None")
         return
 
     role = callback.data.removeprefix(ROLE_CALLBACK_PREFIX)  # type: ignore[union-attr]
+    log.info("[LIVE_CHECK] role_callback data=%s parsed_role=%s user_id=%s", callback.data, role, callback.from_user.id)
+    log.info("🔴 DEBUG: role parsed as '%s'", role)
 
     if role not in VALID_ROLES:
         log.warning("Unknown role received: %s", role)
         await callback.answer("Неизвестная роль. Попробуйте ещё раз.")
         return
 
+    log.info("🔴 DEBUG: role '%s' is valid, saving to DB...", role)
     async with AsyncSessionLocal() as session:
         user = await set_user_role(session, callback.from_user.id, role)
+    log.info("🔴 DEBUG: user role saved, user_id=%s role=%s", user.id, user.role)
     role_label = ROLE_LABELS.get(user.role or "", user.role or "")
+    log.info("🔴 DEBUG: role_label='%s'", role_label)
 
     await state.set_state(RegistrationStates.waiting_for_family_title)
+    log.info("🔴 DEBUG: FSM state set to waiting_for_family_title")
     await state.update_data(selected_role=role, user_id=user.id)
-    await callback.message.edit_text(
-        f"✅ Роль <b>{role_label}</b> сохранена!\n\nВыберите, как обозначить вас в семье.",
-    )
-    await callback.message.answer(
-        "Выберите, как обозначить вас в семье.",
-        reply_markup=family_title_keyboard(role),
-    )
+    log.info("🔴 DEBUG: FSM data updated")
+    
+    try:
+        await callback.message.edit_text(
+            f"✅ Роль <b>{role_label}</b> сохранена!\n\nВыберите, как обозначить вас в семье.",
+        )
+        log.info("🔴 DEBUG: edit_text sent")
+    except Exception as e:
+        log.error("🔴 DEBUG: edit_text failed: %s", e)
+    
+    try:
+        await callback.message.answer(
+            "Выберите, как обозначить вас в семье.",
+            reply_markup=family_title_keyboard(role),
+        )
+        log.info("🔴 DEBUG: answer sent")
+    except Exception as e:
+        log.error("🔴 DEBUG: answer failed: %s", e)
 
     await callback.answer()
+    log.info("🔴 DEBUG: cb_select_role COMPLETED")
 
 
 @router.message(RegistrationStates.waiting_for_family_title)
@@ -1323,9 +1344,12 @@ async def cb_waiting_for_family_title_fallback(callback: CallbackQuery, state: F
 
 @router.callback_query(RegistrationStates.waiting_for_role, F.data == MODE_PERSONAL)
 async def cb_mode_personal(callback: CallbackQuery, state: FSMContext) -> None:
+    print(f"🔴 DEBUG: cb_mode_personal CALLED with data={callback.data}")
+    log.info("🔴 DEBUG: cb_mode_personal CALLED with data=%s", callback.data)
     """User picked 'Personal test' from mode screen — start personal mini-test."""
     if callback.from_user is None or callback.message is None:
         return
+    log.info("[LIVE_CHECK] mode_callback mode=personal user_id=%s", callback.from_user.id)
     await callback.answer()
     await state.clear()
 
@@ -1492,9 +1516,13 @@ async def cb_mini_test_answer(callback: CallbackQuery, state: FSMContext) -> Non
 
 @router.callback_query(RegistrationStates.waiting_for_role, F.data == MODE_PAIR)
 async def cb_mode_pair(callback: CallbackQuery, state: FSMContext) -> None:
+    print(f"🔴 DEBUG: cb_mode_pair CALLED with data={callback.data}")
+    log.info("🔴 DEBUG: cb_mode_pair CALLED with data=%s", callback.data)
     """User picked 'Pair test' from mode screen."""
     if callback.message is None:
         return
+    if callback.from_user is not None:
+        log.info("[LIVE_CHECK] mode_callback mode=pair user_id=%s", callback.from_user.id)
     await callback.answer()
     await state.clear()
     await state.update_data(mode="pair")
@@ -1931,3 +1959,42 @@ async def handle_test_answer(message: Message, state: FSMContext) -> None:
         return
 
     await message.answer("Выберите один из вариантов кнопкой под вопросом.")
+
+
+# ───────── FALLBACK БЕЗ FSM ─────────
+
+@router.callback_query(F.data.startswith(ROLE_CALLBACK_PREFIX))
+async def cb_select_role_stateless(callback: CallbackQuery, state: FSMContext):
+    print(f"🟡 DEBUG: cb_select_role_stateless CALLED with data={callback.data}")
+    log.info("🟡 DEBUG: cb_select_role_stateless CALLED with data=%s", callback.data)
+    if callback.from_user is None or callback.message is None:
+        return
+
+    role = (callback.data or "").replace(ROLE_CALLBACK_PREFIX, "")
+    if callback.from_user is not None:
+        log.info("[LIVE_CHECK] role_stateless data=%s parsed_role=%s user_id=%s", callback.data, role, callback.from_user.id)
+    if role not in VALID_ROLES:
+        await callback.answer("Ошибка роли", show_alert=True)
+        return
+
+    await state.set_state(RegistrationStates.waiting_for_role)
+    await state.update_data(selected_role=role)
+
+    await cb_select_role(callback, state)
+
+
+@router.callback_query(F.data.in_({MODE_PERSONAL, MODE_PAIR}))
+async def cb_mode_stateless(callback: CallbackQuery, state: FSMContext):
+    print(f"🟡 DEBUG: cb_mode_stateless CALLED with data={callback.data}")
+    log.info("🟡 DEBUG: cb_mode_stateless CALLED with data=%s", callback.data)
+    if callback.message is None:
+        return
+    if callback.from_user is not None:
+        log.info("[LIVE_CHECK] mode_stateless data=%s user_id=%s", callback.data, callback.from_user.id)
+
+    await state.set_state(RegistrationStates.waiting_for_role)
+
+    if callback.data == MODE_PERSONAL:
+        await cb_mode_personal(callback, state)
+    else:
+        await cb_mode_pair(callback, state)
