@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 from aiogram import F, Router, Dispatcher
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove, User as TgUser
 from aiogram.utils.deep_linking import decode_payload
@@ -932,7 +932,7 @@ async def cmd_start(message: Message, state: FSMContext, dispatcher: Dispatcher)
     )
 
 
-@router.message(F.text)
+@router.message(F.text, StateFilter(None))
 async def auto_resume_any_message(message: Message, state: FSMContext, dispatcher: Dispatcher) -> None:
     """Silent auto-resume for stray user messages outside active FSM screens."""
     if message.from_user is None:

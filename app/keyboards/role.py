@@ -2,7 +2,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 ROLE_CALLBACK_PREFIX = "select_role:"
 ROLE_REFRESH_TEXT = "Обновить роль"
-PARENT_FAMILY_TITLES = ("мама", "папа", "родитель")
+PARENT_FAMILY_TITLES = ("мама", "папа")
 TEEN_FAMILY_TITLES = ("дочь", "сын", "подросток")
 
 ROLE_LABELS: dict[str, str] = {
