@@ -327,11 +327,15 @@ async def start_next_phase_for_both_users(
     if current_phase == 2:
         for telegram_id, _role in participants:
             await bot.send_message(telegram_id, "⏳ Анализируем ответы...")
-    phase2_report_text = (
-        await build_phase2_comparison_report(session, pair_session_id=pair_session_id)
-        if current_phase == 2
-        else None
-    )
+    phase2_report_text = None
+    if current_phase == 2:
+        try:
+            phase2_report_text = await build_phase2_comparison_report(
+                session,
+                pair_session_id=pair_session_id,
+            )
+        except Exception:
+            log.exception("[PAIR] build_phase2_comparison_report failed, continuing without report")
     progress = await get_dialogue_progress(session, pair_session_id=pair_session_id) if next_phase > 4 else None
     report_text = build_dialogue_report(progress) if progress is not None else None
 
@@ -346,7 +350,9 @@ async def start_next_phase_for_both_users(
         if isinstance(current_user_phase, int) and current_user_phase > current_phase:
             continue
         if data.get("phase_transition_done") and data.get("transition_from_phase") == current_phase:
-            continue
+            # For phase 3 allow re-send if selection screen wasn't sent yet.
+            if next_phase != 3 or data.get("phase_3_selection_sent"):
+                continue
 
         await state.update_data(phase_transition_done=True, transition_from_phase=current_phase)
 
@@ -414,6 +420,7 @@ async def start_next_phase_for_both_users(
                 f"Сейчас будет интересно 👇\n\nВыберите {PHASE3_MIN_CHOICES}–{PHASE3_MAX_CHOICES} сценариев, которые ближе вашей ситуации.",
                 reply_markup=pair_phase3_scenario_select_keyboard(selected),
             )
+            await state.update_data(phase_3_selection_sent=True)
             continue
 
         if next_phase == 4:
@@ -522,6 +529,20 @@ async def _get_telegram_id_by_user_id(user_id: int | None) -> int | None:
     if user is None:
         return None
     return user.telegram_id
+
+
+async def _get_user_id_by_telegram_id(telegram_id: int | None) -> int | None:
+    if telegram_id is None:
+        return None
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select as sa_select
+        from app.db.models import User
+
+        result = await session.execute(sa_select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+    if user is None:
+        return None
+    return user.id
 
 
 async def _notify_other_participant(pair_session, *, role: str, bot, text: str) -> None:
@@ -957,6 +978,16 @@ async def _send_phase2_next_for_both(
     for telegram_id, role in participants:
         peer_state = dispatcher.fsm.get_context(bot=bot, chat_id=telegram_id, user_id=telegram_id)
         data = await peer_state.get_data()
+        resolved_user_id = pair_session.parent_user_id if role == "parent" else pair_session.teen_user_id
+        if not isinstance(resolved_user_id, int):
+            state_user_id = data.get("user_id")
+            if isinstance(state_user_id, int):
+                resolved_user_id = state_user_id
+            else:
+                resolved_user_id = await _get_user_id_by_telegram_id(telegram_id)
+        if not isinstance(resolved_user_id, int):
+            log.warning("[PAIR_P2] skip participant: cannot resolve db user_id for telegram_id=%s role=%s", telegram_id, role)
+            continue
         await peer_state.set_state(PairTest.phase_2)
         await peer_state.update_data(
             pair_task_id=pair_session_id,
@@ -973,7 +1004,7 @@ async def _send_phase2_next_for_both(
             phase_completed=False,
             phase_transition_done=False,
             transition_from_phase=None,
-            user_id=data.get("user_id", telegram_id),
+            user_id=resolved_user_id,
         )
         try:
             await bot.send_message(telegram_id, "Понял тебя.")
@@ -1091,6 +1122,13 @@ async def cb_phase2_answer(callback: CallbackQuery, state: FSMContext, dispatche
         async with AsyncSessionLocal() as session:
             try:
                 async with session.begin():
+                    log.warning(
+                        "[PAIR_P2_DEBUG] pair_session_id=%s user_id=%s role=%s qid=%s",
+                        pair_session_id,
+                        user_id,
+                        role,
+                        question_id,
+                    )
                     sync_result = await process_phase2_answer_sync(
                         session,
                         pair_session_id=pair_session_id,
@@ -1111,6 +1149,7 @@ async def cb_phase2_answer(callback: CallbackQuery, state: FSMContext, dispatche
                 await callback.message.answer("Не удалось сохранить ответ. Нажмите кнопку ещё раз.")
                 return
 
+            log.warning("[PAIR_P2_DEBUG] status=%s", sync_result.get("status"))
         status = sync_result.get("status")
         if status in ("already_answered", "stale"):
             await state.update_data(**{lock_key: False})

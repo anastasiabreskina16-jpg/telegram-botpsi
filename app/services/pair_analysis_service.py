@@ -198,74 +198,76 @@ def build_report(
 async def build_phase2_comparison_report(
     session, *, pair_session_id: int
 ) -> str | None:
-    pair_session = await get_pair_session_by_id_for_update(session, pair_session_id=pair_session_id)
-    if pair_session is None:
-        return None
-    if pair_session.phase2_report_sent:
-        return None
+    from app.db.session import AsyncSessionLocal
 
-    teen_map = await get_phase2_answers_for_role(session, pair_session_id=pair_session_id, role="teen")
-    parent_map = await get_phase2_answers_for_role(session, pair_session_id=pair_session_id, role="parent")
+    async with AsyncSessionLocal() as fresh_session:
+        pair_session = await get_pair_session_by_id_for_update(fresh_session, pair_session_id=pair_session_id)
+        if pair_session is None:
+            return None
+        if pair_session.phase2_report_sent:
+            return None
 
-    teen_scores = calculate_blocks(_ordered_answers(teen_map))
-    parent_scores = calculate_blocks(_ordered_answers(parent_map))
-    diff = compare(teen_scores, parent_scores)
+        teen_map = await get_phase2_answers_for_role(fresh_session, pair_session_id=pair_session_id, role="teen")
+        parent_map = await get_phase2_answers_for_role(fresh_session, pair_session_id=pair_session_id, role="parent")
 
-    previous_diff = None
-    if hasattr(session, "execute"):
+        teen_scores = calculate_blocks(_ordered_answers(teen_map))
+        parent_scores = calculate_blocks(_ordered_answers(parent_map))
+        diff = compare(teen_scores, parent_scores)
+
+        previous_diff = None
         if pair_session.teen_user_id is not None:
-            teen_last_result = await get_last_result(session, pair_session.teen_user_id)
+            teen_last_result = await get_last_result(fresh_session, pair_session.teen_user_id)
             if teen_last_result is not None:
                 previous_diff = teen_last_result.diff
         if previous_diff is None and pair_session.parent_user_id is not None:
-            parent_last_result = await get_last_result(session, pair_session.parent_user_id)
+            parent_last_result = await get_last_result(fresh_session, pair_session.parent_user_id)
             if parent_last_result is not None:
                 previous_diff = parent_last_result.diff
 
-    structured = build_report(diff)
+        structured = build_report(diff)
 
-    from app.services.ai_report_service import get_or_create_ai_report
-    try:
-        ai_text = await asyncio.wait_for(
-            get_or_create_ai_report(
-                session,
-                pair_session_id=pair_session_id,
-                diff=diff,
-                previous_diff=previous_diff,
+        from app.services.ai_report_service import get_or_create_ai_report
+        try:
+            ai_text = await asyncio.wait_for(
+                get_or_create_ai_report(
+                    fresh_session,
+                    pair_session_id=pair_session_id,
+                    diff=diff,
+                    previous_diff=previous_diff,
+                    teen_scores=teen_scores,
+                    parent_scores=parent_scores,
+                ),
+                timeout=5,
+            )
+        except asyncio.TimeoutError:
+            ai_text = None
+        except Exception:
+            ai_text = None
+
+        if ai_text:
+            final_text = structured + "\n\n🧠 <b>Как это выглядит со стороны:</b>\n\n" + ai_text
+        else:
+            final_text = structured
+
+        # Add personalized mission
+        mission_text = build_mission_block(diff)
+        final_text += mission_text
+
+        for uid in [pair_session.teen_user_id, pair_session.parent_user_id]:
+            if uid is None:
+                continue
+            await save_result(
+                session=fresh_session,
+                user_id=uid,
+                pair_session_id=pair_session.id,
                 teen_scores=teen_scores,
                 parent_scores=parent_scores,
-            ),
-            timeout=5,
-        )
-    except asyncio.TimeoutError:
-        ai_text = None
-    except Exception:
-        ai_text = None
+                diff=diff,
+                ai_report=final_text,
+            )
 
-    if ai_text:
-        final_text = structured + "\n\n🧠 <b>Как это выглядит со стороны:</b>\n\n" + ai_text
-    else:
-        final_text = structured
+        pair_session.phase2_report_sent = True
+        await fresh_session.commit()
+        log.info("AI_REPORT pair=%s generated=%s", pair_session_id, bool(ai_text))
 
-    # Add personalized mission
-    mission_text = build_mission_block(diff)
-    final_text += mission_text
-
-    for uid in [pair_session.teen_user_id, pair_session.parent_user_id]:
-        if uid is None:
-            continue
-        await save_result(
-            session=session,
-            user_id=uid,
-            pair_session_id=pair_session.id,
-            teen_scores=teen_scores,
-            parent_scores=parent_scores,
-            diff=diff,
-            ai_report=final_text,
-        )
-
-    pair_session.phase2_report_sent = True
-    await session.commit()
-    log.info("AI_REPORT pair=%s generated=%s", pair_session_id, bool(ai_text))
-
-    return final_text
+        return final_text

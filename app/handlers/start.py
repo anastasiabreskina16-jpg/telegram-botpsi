@@ -877,8 +877,6 @@ async def cmd_start_deeplink(
                 await message.answer(START_TEXTS["invite_invalid"])
                 return
 
-            inviter_user = await get_user_by_id(session, inviter_id) if inviter_id is not None else None
-
             if invite.status == "pending":
                 if user.role == "parent":
                     await state.clear()
@@ -902,19 +900,41 @@ async def cmd_start_deeplink(
                     await message.answer(START_TEXTS["family_active"])
                     return
 
+            required_role_for_confirm = "teen" if invite.status == "pending" else "parent"
             if user.role is None:
-                required_role_for_confirm = "teen" if invite.status == "pending" else "parent"
                 user.role = required_role_for_confirm
                 await session.commit()
 
-            confirm_text = _build_invite_confirm_text(invite, inviter_user)
+            try:
+                payload = await _complete_family_link_payload(session, confirmer=user, token=token)
+            except ValueError:
+                await state.clear()
+                await message.answer(START_TEXTS["invite_invalid"])
+                return
 
-        await state.clear()
-        await message.answer(
-            confirm_text,
-            reply_markup=family_confirm_keyboard(token=token),
-        )
-        return
+            await state.clear()
+            role_label = ROLE_LABELS.get(payload["actor_role"], payload["actor_role"])
+            await message.answer(
+                f"✅ Семейная связь создана!\nВаша роль: <b>{role_label}</b>.\n\n"
+                f"{payload['actor_family_status_text']}",
+                reply_markup=family_status_keyboard(
+                    role=payload["actor_role"],
+                    has_family_link=payload["actor_has_family_link"],
+                ),
+            )
+            if payload["peer_telegram_id"] is not None:
+                try:
+                    await message.bot.send_message(
+                        payload["peer_telegram_id"],
+                        f"✅ Семейная связь создана!\n{payload['peer_family_status_text']}",
+                        reply_markup=family_status_keyboard(
+                            role=payload["peer_role"],
+                            has_family_link=payload["peer_has_family_link"],
+                        ),
+                    )
+                except Exception:
+                    log.warning("Failed to notify peer about family link", exc_info=True)
+            return
 
     await message.answer("Некорректная ссылка приглашения.")
 
@@ -960,8 +980,6 @@ async def cmd_start(message: Message, state: FSMContext, dispatcher: Dispatcher)
                 await message.answer(START_TEXTS["invite_invalid"])
                 return
 
-            inviter_user = await get_user_by_id(session, inviter_id) if inviter_id is not None else None
-
             if invite.status == "pending":
                 if user.role == "parent":
                     await state.clear()
@@ -973,7 +991,6 @@ async def cmd_start(message: Message, state: FSMContext, dispatcher: Dispatcher)
                     await state.clear()
                     await message.answer(START_TEXTS["family_active"])
                     return
-                confirm_text = _build_invite_confirm_text(invite, inviter_user)
             else:
                 if user.role == "teen":
                     await state.clear()
@@ -986,18 +1003,40 @@ async def cmd_start(message: Message, state: FSMContext, dispatcher: Dispatcher)
                     await message.answer(START_TEXTS["family_active"])
                     return
 
+            required_role_for_confirm = "teen" if invite.status == "pending" else "parent"
             if user.role is None:
-                required_role_for_confirm = "teen" if invite.status == "pending" else "parent"
                 user.role = required_role_for_confirm
                 await session.commit()
 
-            confirm_text = _build_invite_confirm_text(invite, inviter_user)
+            try:
+                payload = await _complete_family_link_payload(session, confirmer=user, token=family_token)
+            except ValueError:
+                await state.clear()
+                await message.answer(START_TEXTS["invite_invalid"])
+                return
 
             await state.clear()
+            role_label = ROLE_LABELS.get(payload["actor_role"], payload["actor_role"])
             await message.answer(
-                confirm_text,
-                reply_markup=family_confirm_keyboard(token=family_token),
+                f"✅ Семейная связь создана!\nВаша роль: <b>{role_label}</b>.\n\n"
+                f"{payload['actor_family_status_text']}",
+                reply_markup=family_status_keyboard(
+                    role=payload["actor_role"],
+                    has_family_link=payload["actor_has_family_link"],
+                ),
             )
+            if payload["peer_telegram_id"] is not None:
+                try:
+                    await message.bot.send_message(
+                        payload["peer_telegram_id"],
+                        f"✅ Семейная связь создана!\n{payload['peer_family_status_text']}",
+                        reply_markup=family_status_keyboard(
+                            role=payload["peer_role"],
+                            has_family_link=payload["peer_has_family_link"],
+                        ),
+                    )
+                except Exception:
+                    log.warning("Failed to notify peer about family link", exc_info=True)
             return
 
         if user.role is not None:
@@ -1907,37 +1946,9 @@ async def cb_family_confirm(callback: CallbackQuery, state: FSMContext) -> None:
             await callback.message.answer(_wrong_role_invite_message(required_role))
             return
 
-        if not _is_profile_complete_for_role(confirmer, required_role):
-            await state.clear()
-            await state.update_data(
-                pending_invite_onboarding=True,
-                pending_family_token=token,
-                pending_expected_role=required_role,
-            )
-
-            if confirmer.role is None:
-                confirmer.role = required_role
-                await session.commit()
-
-            role_label = ROLE_LABELS.get(required_role, required_role)
-            await callback.message.answer(
-                f"✅ Ваша роль определена: <b>{role_label}</b>.\n\n"
-                "Осталось заполнить профиль, чтобы создать семейную связь."
-            )
-
-            if not _is_display_name_filled(confirmer.display_name):
-                await state.set_state(RegistrationStates.waiting_for_display_name)
-                await callback.message.answer(
-                    START_TEXTS["name_prompt"],
-                    reply_markup=ReplyKeyboardRemove(),
-                )
-            else:
-                await state.set_state(RegistrationStates.waiting_for_family_title)
-                await callback.message.answer(
-                    START_TEXTS["family_title_prompt"],
-                    reply_markup=family_title_keyboard(required_role),
-                )
-            return
+        if confirmer.role is None:
+            confirmer.role = required_role
+            await session.commit()
 
         try:
             payload = await _complete_family_link_payload(session, confirmer=confirmer, token=token)
@@ -1945,12 +1956,12 @@ async def cb_family_confirm(callback: CallbackQuery, state: FSMContext) -> None:
             await callback.message.answer(START_TEXTS["invite_invalid"])
             return
 
-    actor_success_text = "Семейная связь успешно создана."
-    if payload["actor_label"]:
-        actor_success_text = f"Семейная связь успешно создана, {payload['actor_label']}."
+    actor_success_text = "✅ Семейная связь создана!"
+    role_label = ROLE_LABELS.get(payload["actor_role"], payload["actor_role"])
+    actor_success_text += f"\nВаша роль: <b>{role_label}</b>."
 
     await callback.message.answer(
-        f"{actor_success_text}\n{payload['actor_family_status_text']}",
+        f"{actor_success_text}\n\n{payload['actor_family_status_text']}",
         reply_markup=family_status_keyboard(role=payload["actor_role"], has_family_link=payload["actor_has_family_link"]),
     )
 
