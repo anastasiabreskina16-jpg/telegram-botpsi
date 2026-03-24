@@ -61,7 +61,8 @@ def build_score_components(
     returned: builtins.bool,
     consistent: builtins.bool,
 ) -> builtins.dict[builtins.str, builtins.int]:
-    engagement_score = builtins.max(0, actions_count * 2)
+    # engagement capped at 30 to preserve weight for completion/return/consistency
+    engagement_score = builtins.min(30, builtins.max(0, actions_count * 2))
     completion_score = builtins.int(builtins.max(0.0, builtins.min(completion_ratio, 1.0)) * 30)
     return_score = 20 if returned else 0
     consistency_score = 20 if consistent else 5

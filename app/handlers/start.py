@@ -114,38 +114,17 @@ router = Router(name="start")
 _TEEN_MINI_TEST_IMAGE_DIR = Path(__file__).resolve().parents[2] / "assets" / "teen_test"
 _PARENT_MINI_TEST_IMAGE_DIR = Path(__file__).resolve().parents[2] / "assets" / "parent_test"
 
-_TEEN_MINI_TEST_IMAGE_MAP = {
-    0: "Screenshot_2026-03-17-13-13-54-967_com.lemon.lvoverseas-edit.jpg",
-    1: "Screenshot_2026-03-17-13-18-56-737_com.lemon.lvoverseas-edit.jpg",
-    2: "Screenshot_2026-03-17-13-23-39-215_com.lemon.lvoverseas-edit.jpg",
-    3: "Screenshot_2026-03-17-13-24-27-965_com.lemon.lvoverseas-edit.jpg",
-    4: "Screenshot_2026-03-17-16-56-47-007_com.lemon.lvoverseas-edit.jpg",
-    5: "Screenshot_2026-03-17-16-58-16-794_com.lemon.lvoverseas-edit.jpg",
-    6: "Screenshot_2026-03-17-17-02-08-484_com.lemon.lvoverseas-edit.jpg",
-    7: "Screenshot_2026-03-17-17-02-46-439_com.lemon.lvoverseas-edit.jpg",
-    8: "Screenshot_2026-03-17-17-03-36-021_com.lemon.lvoverseas-edit.jpg",
-    9: "Screenshot_2026-03-17-17-09-07-388_com.lemon.lvoverseas-edit.jpg",
-    10: "Screenshot_2026-03-17-17-09-47-911_com.lemon.lvoverseas-edit.jpg",
-    11: "Screenshot_2026-03-17-17-10-23-461_com.lemon.lvoverseas-edit.jpg",
-    12: "Screenshot_2026-03-17-17-11-16-010_com.lemon.lvoverseas-edit.jpg",
-    13: "Screenshot_2026-03-17-17-14-37-567_com.lemon.lvoverseas-edit.jpg",
-    14: "Screenshot_2026-03-17-17-18-05-126_com.lemon.lvoverseas-edit.jpg",
-    15: "Screenshot_2026-03-17-17-19-24-404_com.lemon.lvoverseas-edit.jpg",
-    16: "Screenshot_2026-03-17-17-20-00-105_com.lemon.lvoverseas-edit.jpg",
-    17: "Screenshot_2026-03-17-17-21-25-316_com.lemon.lvoverseas-edit.jpg",
-    18: "Screenshot_2026-03-17-17-26-22-267_com.lemon.lvoverseas-edit.jpg",
-    19: "Screenshot_2026-03-17-17-27-09-018_com.lemon.lvoverseas-edit.jpg",
-    20: "Screenshot_2026-03-17-17-30-02-797_com.lemon.lvoverseas-edit.jpg",
-    21: "5319200620122150169.jpg",
-    22: "Screenshot_2026-03-17-17-33-48-401_com.lemon.lvoverseas-edit.jpg",
-    23: "Screenshot_2026-03-17-17-34-43-140_com.lemon.lvoverseas-edit.jpg",
-    24: "Screenshot_2026-03-17-17-42-28-245_com.lemon.lvoverseas-edit.jpg",
-    25: "Screenshot_2026-03-17-17-43-16-039_com.lemon.lvoverseas-edit.jpg",
-    26: "Screenshot_2026-03-17-17-45-26-964_com.lemon.lvoverseas-edit.jpg",
-    27: "Screenshot_2026-03-17-17-47-27-024_com.lemon.lvoverseas-edit.jpg",
-    28: "Screenshot_2026-03-17-17-48-05-240_com.lemon.lvoverseas-edit.jpg",
-    29: "Screenshot_2026-03-17-17-49-26-297_com.lemon.lvoverseas-edit.jpg",
-}
+def _build_teen_mini_test_image_map() -> dict[int, str]:
+    if not _TEEN_MINI_TEST_IMAGE_DIR.exists():
+        log.warning("Teen images folder missing: %s", _TEEN_MINI_TEST_IMAGE_DIR)
+        return {}
+    return {
+        idx: path.name
+        for idx, path in enumerate(sorted(_TEEN_MINI_TEST_IMAGE_DIR.glob("*")))
+    }
+
+
+_TEEN_MINI_TEST_IMAGE_MAP = _build_teen_mini_test_image_map()
 
 def _build_parent_mini_test_image_map() -> dict[int, str]:
     if not _PARENT_MINI_TEST_IMAGE_DIR.exists():
@@ -305,15 +284,11 @@ async def _send_family_invite(message: Message, tg_user: TgUser) -> None:
             )
             return
 
-        try:
-            invite = await create_family_invite(
-                session,
-                inviter_user_id=user.id,
-                inviter_role=user.role,
-            )
-        except ValueError:
-            await message.answer(START_TEXTS["invite_exists"])
-            return
+        invite = await create_family_invite(
+            session,
+            inviter_user_id=user.id,
+            inviter_role=user.role,
+        )
 
     me = await message.bot.get_me()
     if not me.username:
@@ -724,6 +699,106 @@ async def _handle_pair_deeplink(
         log.warning("Failed to notify teen about parent connection", exc_info=True)
 
 
+async def _handle_joinpair_deeplink(
+    message: Message,
+    state: FSMContext,
+    pair_test_session_id: int,
+) -> None:
+    """Handle /start joinpair_<id>: teen joins a parent-initiated PairTestSession."""
+    from app.db.models import User as _User
+    from app.keyboards.pair_test import pair_join_confirm_keyboard, pair_phase1_score_keyboard
+    from app.services.pair_test_service import get_pair_session_by_id, join_pair_session
+    from app.states.pair_test import PairTest, PairTestStates
+    from sqlalchemy import select as _select
+
+    if message.from_user is None or message.bot is None:
+        return
+
+    async with AsyncSessionLocal() as session:
+        user, _ = await get_or_create_user(session, message.from_user)
+
+        if user.role != "teen":
+            await message.answer("Эта ссылка только для подростка.")
+            return
+
+        pair_session = await get_pair_session_by_id(session, pair_session_id=pair_test_session_id)
+        if pair_session is None:
+            await message.answer("Приглашение устарело или уже использовано. Попросите родителя создать новое.")
+            return
+        if pair_session.parent_user_id == user.id:
+            await message.answer("Вы не можете подключиться к собственной сессии.")
+            return
+
+        try:
+            pair_session = await join_pair_session(
+                session,
+                pair_code=pair_session.pair_code,
+                teen_user_id=user.id,
+            )
+        except Exception as exc:
+            reason = str(exc)
+            if "not_found" in reason or "not_joinable" in reason:
+                await message.answer("Приглашение устарело или уже использовано. Попросите родителя создать новое.")
+            elif "already_joined" in reason:
+                await message.answer("К сессии уже подключен другой подросток.")
+            elif "self_join" in reason:
+                await message.answer("Вы не можете подключиться к собственной сессии.")
+            else:
+                await message.answer("Не удалось подключиться. Попробуйте ещё раз.")
+            return
+
+        parent_user_id = pair_session.parent_user_id
+        parent_row = await session.execute(
+            _select(_User).where(_User.id == parent_user_id)
+        )
+        parent = parent_row.scalar_one_or_none()
+
+    await state.clear()
+    await state.set_state(PairTestStates.waiting_phase1_score)
+    await state.update_data(
+        pair_session_id=pair_session.id,
+        pair_task_id=pair_session.id,
+        user_id=user.id,
+        role="teen",
+        phase=1,
+        question_index=0,
+        phase_completed=False,
+        waiting_for_other=False,
+        mode="pair_test",
+        fsm_phase_state=PairTest.phase_1.state,
+        phase_1_sent=False,
+        phase_2_sent=False,
+        phase_3_selection_sent=False,
+        phase_3_sent=False,
+        phase_4_sent=False,
+    )
+
+    phase1_prompt = (
+        TEXTS["phase_1"]
+        + "\n"
+        + "Когда я думаю о теме выбора профессии и будущего, я чувствую...\n"
+        + "Выберите оценку от 1 до 10:"
+    )
+
+    await message.answer("✅ Подключение успешно!", reply_markup=pair_join_confirm_keyboard())
+    await message.answer(phase1_prompt, reply_markup=pair_phase1_score_keyboard())
+
+    if parent is not None:
+        try:
+            await message.bot.send_message(
+                parent.telegram_id,
+                "✅ Подросток подключился. Начинаем!",
+                reply_markup=pair_join_confirm_keyboard(),
+            )
+            await message.bot.send_message(
+                parent.telegram_id,
+                phase1_prompt,
+                reply_markup=pair_phase1_score_keyboard(),
+            )
+        except Exception:
+            log.warning("Failed to notify parent about teen joining", exc_info=True)
+
+
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_deeplink(
     message: Message,
@@ -770,6 +845,73 @@ async def cmd_start_deeplink(
 
         await _handle_pair_deeplink(message, state, pair_id, dispatcher)
         return
+
+    if payload.startswith("joinpair_"):
+        try:
+            pair_test_session_id = int(payload.split("_", 1)[1])
+        except Exception:
+            await message.answer("Некорректная ссылка.")
+            return
+
+        await _handle_joinpair_deeplink(message, state, pair_test_session_id)
+        return
+
+    if payload.startswith("family_"):
+        token = payload[len("family_"):]
+        if not token:
+            await message.answer(START_TEXTS["invite_invalid"])
+            return
+
+        async with AsyncSessionLocal() as session:
+            user, _ = await get_or_create_user(session, message.from_user)
+            invite = await get_testable_invite_by_token(session, token=token)
+
+            if invite is None:
+                await state.clear()
+                await message.answer(START_TEXTS["invite_invalid"])
+                return
+
+            inviter_id = invite.parent_user_id if invite.status == "pending" else invite.teen_user_id
+            if inviter_id == user.id:
+                await state.clear()
+                await message.answer(START_TEXTS["invite_invalid"])
+                return
+
+            inviter_user = await get_user_by_id(session, inviter_id) if inviter_id is not None else None
+
+            if invite.status == "pending":
+                if user.role == "parent":
+                    await state.clear()
+                    await message.answer("Роль родителя нельзя привязать как подростка по приглашению.")
+                    return
+
+                linked = await get_linked_family_for_teen(session, teen_user_id=user.id)
+                if linked is not None:
+                    await state.clear()
+                    await message.answer(START_TEXTS["family_active"])
+                    return
+            else:
+                if user.role == "teen":
+                    await state.clear()
+                    await message.answer("Роль подростка нельзя привязать как родителя по приглашению.")
+                    return
+
+                linked = await get_family_for_user(session, user_id=user.id)
+                if linked is not None:
+                    await state.clear()
+                    await message.answer(START_TEXTS["family_active"])
+                    return
+
+            confirm_text = _build_invite_confirm_text(invite, inviter_user)
+
+        await state.clear()
+        await message.answer(
+            confirm_text,
+            reply_markup=family_confirm_keyboard(token=token),
+        )
+        return
+
+    await message.answer("Некорректная ссылка приглашения.")
 
 
 # ── /start ─────────────────────────────────────────────────────────────────────

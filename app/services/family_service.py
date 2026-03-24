@@ -44,14 +44,15 @@ async def create_family_invite(
         if linked is not None:
             raise ValueError("already_linked")
 
-        existing_pending = await session.execute(
+        existing_pending_result = await session.execute(
             select(FamilyLink).where(
                 FamilyLink.parent_user_id == inviter_user_id,
                 FamilyLink.status.in_(pending_statuses),
             )
         )
-        if existing_pending.scalars().first() is not None:
-            raise ValueError("invite_already_active")
+        existing_invite = existing_pending_result.scalars().first()
+        if existing_invite is not None:
+            return existing_invite
 
         invite_status = "pending"
         parent_user_id = inviter_user_id
@@ -61,14 +62,15 @@ async def create_family_invite(
         if linked is not None:
             raise ValueError("already_linked")
 
-        existing_pending = await session.execute(
+        existing_pending_result = await session.execute(
             select(FamilyLink).where(
                 FamilyLink.teen_user_id == inviter_user_id,
                 FamilyLink.status.in_(pending_statuses),
             )
         )
-        if existing_pending.scalars().first() is not None:
-            raise ValueError("invite_already_active")
+        existing_invite = existing_pending_result.scalars().first()
+        if existing_invite is not None:
+            return existing_invite
 
         # Keep inviter teen ID in teen_user_id while parent is still unknown.
         invite_status = "pending_parent"
