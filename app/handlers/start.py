@@ -902,6 +902,11 @@ async def cmd_start_deeplink(
                     await message.answer(START_TEXTS["family_active"])
                     return
 
+            if user.role is None:
+                required_role_for_confirm = "teen" if invite.status == "pending" else "parent"
+                user.role = required_role_for_confirm
+                await session.commit()
+
             confirm_text = _build_invite_confirm_text(invite, inviter_user)
 
         await state.clear()
@@ -929,7 +934,7 @@ async def cmd_start(message: Message, state: FSMContext, dispatcher: Dispatcher)
         await session.commit()
 
         # Zero-friction auto-resume: no extra text, jump directly back to active pair flow.
-        if user.role in {"teen", "parent"}:
+        if user.role in {"teen", "parent"} and family_token is None:
             from app.services.pair_test_service import get_active_pair_session_for_user
             from app.handlers.pair_test import msg_resume_pair_test
 
@@ -980,7 +985,13 @@ async def cmd_start(message: Message, state: FSMContext, dispatcher: Dispatcher)
                     await state.clear()
                     await message.answer(START_TEXTS["family_active"])
                     return
-                confirm_text = _build_invite_confirm_text(invite, inviter_user)
+
+            if user.role is None:
+                required_role_for_confirm = "teen" if invite.status == "pending" else "parent"
+                user.role = required_role_for_confirm
+                await session.commit()
+
+            confirm_text = _build_invite_confirm_text(invite, inviter_user)
 
             await state.clear()
             await message.answer(
@@ -1903,6 +1914,17 @@ async def cb_family_confirm(callback: CallbackQuery, state: FSMContext) -> None:
                 pending_family_token=token,
                 pending_expected_role=required_role,
             )
+
+            if confirmer.role is None:
+                confirmer.role = required_role
+                await session.commit()
+
+            role_label = ROLE_LABELS.get(required_role, required_role)
+            await callback.message.answer(
+                f"✅ Ваша роль определена: <b>{role_label}</b>.\n\n"
+                "Осталось заполнить профиль, чтобы создать семейную связь."
+            )
+
             if not _is_display_name_filled(confirmer.display_name):
                 await state.set_state(RegistrationStates.waiting_for_display_name)
                 await callback.message.answer(

@@ -1,4 +1,4 @@
-﻿"""Pair test handler for the new scenario "Dialog about choice"."""
+"""Pair test handler for the new scenario "Dialog about choice"."""
 from __future__ import annotations
 
 import asyncio
@@ -393,12 +393,14 @@ async def start_next_phase_for_both_users(
             questions = get_questions_for_phase(next_phase, role)
             await state.update_data(phase2_question_id=1)
             if questions:
+                await asyncio.sleep(1.0)
                 await bot.send_chat_action(telegram_id, "typing")
                 await asyncio.sleep(0.5)
                 await bot.send_message(
                     telegram_id,
-                    format_question(questions[0], phase=2),
+                    questions[0],
                     reply_markup=pair_phase2_answer_keyboard(1),
+                    parse_mode=None,
                 )
             continue
 
@@ -925,8 +927,9 @@ async def _send_phase2_question(message: Message, *, role: str, question_id: int
     )
     await _typing_pause(message.chat.id, message.bot)
     await message.answer(
-        format_question(question, phase=2),
+        question,
         reply_markup=pair_phase2_answer_keyboard(question_id),
+        parse_mode=None,
     )
 
 
@@ -942,9 +945,12 @@ async def _send_phase2_next_for_both(
         if pair_session is None:
             return
 
-        # Hard anti-desync gate: next question only when both indices are aligned.
         if pair_session.teen_index != pair_session.parent_index:
-            return
+            log.warning(
+                "[PAIR_P2] index mismatch teen=%s parent=%s, sending anyway",
+                pair_session.teen_index,
+                pair_session.parent_index,
+            )
 
         participants = await _pair_participants(session, pair_session_id=pair_session_id)
 
@@ -969,13 +975,25 @@ async def _send_phase2_next_for_both(
             transition_from_phase=None,
             user_id=data.get("user_id", telegram_id),
         )
-        await bot.send_message(telegram_id, "Понял тебя.")
-        question_text = get_phase_question(phase=2, role=role, index=question_id - 1)
-        await bot.send_message(
-            telegram_id,
-            format_question(question_text, phase=2),
-            reply_markup=pair_phase2_answer_keyboard(question_id),
-        )
+        try:
+            await bot.send_message(telegram_id, "Понял тебя.")
+            await asyncio.sleep(0.8)
+            await bot.send_chat_action(telegram_id, "typing")
+            await asyncio.sleep(0.5)
+            question_text = get_phase_question(phase=2, role=role, index=question_id - 1)
+            await bot.send_message(
+                telegram_id,
+                question_text,
+                reply_markup=pair_phase2_answer_keyboard(question_id),
+                parse_mode=None,
+            )
+        except Exception:
+            log.exception(
+                "[PAIR_P2] failed to send question qid=%s to telegram_id=%s role=%s",
+                question_id,
+                telegram_id,
+                role,
+            )
 
 
 @router.callback_query(PairTestStates.phase2_answering, F.data.startswith(PAIR_PHASE2_ANSWER_PREFIX))
