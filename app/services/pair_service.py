@@ -26,6 +26,15 @@ async def build_invite_link(bot, pair_id: builtins.int) -> builtins.str:
     )
 
 
+async def build_pair_test_invite_link(bot, pair_test_session_id: builtins.int) -> builtins.str:
+    """Build a deep link for teen join flow for parent-initiated PairTestSession."""
+    return await create_start_link(
+        bot,
+        payload=f"joinpair_{pair_test_session_id}",
+        encode=True,
+    )
+
+
 async def create_pair_session(
     session: AsyncSession,
     teen_telegram_id: builtins.int,

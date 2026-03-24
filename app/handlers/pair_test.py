@@ -92,7 +92,11 @@ from app.services.result_service import build_result_text, get_last_result
 from app.services.retention_service import ping_partner
 from app.services.segment_service import track_user_event
 from app.services.user_service import get_or_create_user, get_user_role
-from app.services.pair_service import build_invite_link, create_pair_session as _create_pair_invite
+from app.services.pair_service import (
+    build_invite_link,
+    build_pair_test_invite_link,
+    create_pair_session as _create_pair_invite,
+)
 from app.states.pair_test import PairTest, PairTestStates
 from app.states.registration import RegistrationStates
 from app.texts import PAIR_TEXTS, TEXTS
@@ -619,6 +623,9 @@ async def cb_pair_start_parent(callback: CallbackQuery, state: FSMContext) -> No
             family_link_id=family_link_id,
         )
 
+    assert callback.bot is not None
+    teen_link = await build_pair_test_invite_link(callback.bot, pair_test_session_id=pair_session.id)
+
     await state.update_data(
         pair_session_id=pair_session.id,
         pair_task_id=pair_session.id,
@@ -631,6 +638,7 @@ async def cb_pair_start_parent(callback: CallbackQuery, state: FSMContext) -> No
     )
     await callback.message.edit_text(
         f"Ваш код для подключения подростка: <b>{pair_session.pair_code}</b>\n\n"
+        f"Или отправьте подростку ссылку 👇\n{teen_link}\n\n"
         "После подключения вы оба пройдете 4 фазы Диалога о выборе."
     )
     await _send_pair_status_screen(callback.message, pair_session=pair_session)
